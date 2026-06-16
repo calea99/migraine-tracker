@@ -369,16 +369,52 @@ async function saveToDrive() {
   } catch(e) { setStatus('Save failed','err'); }
 }
 
+function autoSelectPressureChip(changeLabel) {
+  document.querySelectorAll('[data-group="pressure"]').forEach(c => c.classList.remove('on'));
+  const match = Array.from(document.querySelectorAll('[data-group="pressure"]')).find(c => c.textContent.trim() === changeLabel);
+  if (match) { match.classList.add('on'); sel.pressure = changeLabel; }
+}
+
 function fetchWeather() {
   if (!navigator.geolocation) { document.getElementById('weather-hint').textContent = 'Enter pressure manually.'; return; }
+  document.getElementById('weather-hint').textContent = 'Fetching pressure...';
   navigator.geolocation.getCurrentPosition(pos => {
-    fetch(`https://api.open-meteo.com/v1/forecast?latitude=${pos.coords.latitude}&longitude=${pos.coords.longitude}&current=temperature_2m,surface_pressure,weather_code&temperature_unit=fahrenheit`)
-      .then(r=>r.json()).then(d => {
-        const p = Math.round(d.current.surface_pressure);
-        const t = Math.round(d.current.temperature_2m);
-        document.getElementById('inp-hpa').value = p;
-        document.getElementById('weather-hint').textContent = `Auto-filled: ${p} hPa · ${t}°F`;
-      }).catch(()=>{ document.getElementById('weather-hint').textContent = 'Could not fetch — enter manually.'; });
+    const { latitude: lat, longitude: lon } = pos.coords;
+    const now = new Date();
+    const past = new Date(now - 24 * 60 * 60 * 1000);
+    const fmt = d => d.toISOString().slice(0, 16);
+    const url = 'https://api.open-meteo.com/v1/forecast?latitude=' + lat + '&longitude=' + lon +
+      '&hourly=surface_pressure&current=temperature_2m,surface_pressure,weather_code' +
+      '&temperature_unit=fahrenheit&start_date=' + past.toISOString().slice(0,10) + '&end_date=' + now.toISOString().slice(0,10);
+    fetch(url).then(r=>r.json()).then(d => {
+      const currentP = Math.round(d.current.surface_pressure);
+      const currentT = Math.round(d.current.temperature_2m);
+      document.getElementById('inp-hpa').value = currentP;
+
+      const times = d.hourly.time;
+      const pressures = d.hourly.surface_pressure;
+      const target24h = fmt(past);
+      let idx = times.findIndex(t => t === target24h);
+      if (idx === -1) idx = 0;
+      const p24h = Math.round(pressures[idx]);
+      const diff = currentP - p24h;
+      const absDiff = Math.abs(diff);
+
+      let changeLabel, changeDesc;
+      if (absDiff < 2) {
+        changeLabel = 'Stable';
+        changeDesc = 'stable (' + (diff >= 0 ? '+' : '') + diff + ' hPa vs 24h ago)';
+      } else if (diff < 0) {
+        changeLabel = 'Dropping';
+        changeDesc = 'down ' + absDiff + ' hPa vs 24h ago' + (absDiff >= 5 ? ' — significant drop' : '');
+      } else {
+        changeLabel = 'Rising';
+        changeDesc = 'up ' + absDiff + ' hPa vs 24h ago';
+      }
+
+      autoSelectPressureChip(changeLabel);
+      document.getElementById('weather-hint').textContent = currentP + ' hPa · ' + currentT + 'F · ' + changeDesc;
+    }).catch(()=>{ document.getElementById('weather-hint').textContent = 'Could not fetch — enter manually.'; });
   }, ()=>{ document.getElementById('weather-hint').textContent = 'Location unavailable — enter manually or search "barometric pressure Raleigh".'; });
 }
 
